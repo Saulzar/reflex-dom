@@ -1,8 +1,10 @@
-{-# LANGUAGE ScopedTypeVariables, LambdaCase, ConstraintKinds, TypeFamilies, FlexibleContexts, MultiParamTypeClasses, FlexibleInstances, RecursiveDo #-}
+{-# LANGUAGE ForeignFunctionInterface, JavaScriptFFI, CPP, ScopedTypeVariables, LambdaCase, ConstraintKinds, TypeFamilies, FlexibleContexts, MultiParamTypeClasses, FlexibleInstances, RecursiveDo #-}
 
 module Reflex.Dom.Widget.Basic where
 
 import Reflex.Dom.Class
+import GHCJS.Types
+import GHCJS.Foreign
 
 import Reflex
 import Reflex.Host.Class
@@ -20,7 +22,9 @@ import GHCJS.DOM.UIEvent
 import GHCJS.DOM.EventM (event, EventM)
 import GHCJS.DOM.Document
 import GHCJS.DOM.Element
-import GHCJS.DOM.HTMLElement
+
+
+import GHCJS.DOM.Element
 import GHCJS.DOM.Types hiding (Widget (..), unWidget, Event)
 import GHCJS.DOM.NamedNodeMap
 import Control.Lens hiding (element, children)
@@ -32,7 +36,7 @@ import Data.Maybe
 type AttributeMap = Map String String
 
 data El t
-  = El { _el_element :: HTMLElement
+  = El { _el_element :: Element
        , _el_clicked :: Event t ()
        , _el_keypress :: Event t Int
        , _el_scrolled :: Event t Int
@@ -54,21 +58,31 @@ instance MonadWidget t m => Attributes m (Dynamic t AttributeMap) where
       forM_ (Set.toList $ oldAttrs `Set.difference` Map.keysSet newAttrs) $ elementRemoveAttribute e
       imapM_ (elementSetAttribute e) newAttrs --TODO: avoid re-setting unchanged attributes; possibly do the compare using Align in haskell
 
-buildEmptyElement :: (MonadWidget t m, Attributes m attrs) => String -> attrs -> m HTMLElement
+buildEmptyElement :: (MonadWidget t m, Attributes m attrs) => String -> attrs -> m Element
 buildEmptyElement elementTag attrs = do
   doc <- askDocument
   p <- askParent
-  Just e <- liftIO $ documentCreateElement doc elementTag
+  
+  namespace <- askNamespace 
+  
+  Just e <- liftIO $ case namespace of 
+    Just ns -> documentCreateElementNS doc ns elementTag
+    Nothing -> documentCreateElement doc elementTag
+  
   addAttributes attrs e
   _ <- liftIO $ nodeAppendChild p $ Just e
-  return $ castToHTMLElement e
-
+  return $ castToElement e
+  
+  
+  
 -- We need to decide what type of attrs we've got statically, because it will often be a recursively defined value, in which case inspecting it will lead to a cycle
-buildElement :: (MonadWidget t m, Attributes m attrs) => String -> attrs -> m a -> m (HTMLElement, a)
+buildElement :: (MonadWidget t m, Attributes m attrs) => String -> attrs -> m a -> m (Element, a)
 buildElement elementTag attrs child = do
   e <- buildEmptyElement elementTag attrs
   result <- subWidget (toNode e) child
   return (e, result)
+
+
 
 namedNodeMapGetNames :: IsNamedNodeMap self => self -> IO (Set String)
 namedNodeMapGetNames self = do
@@ -378,7 +392,7 @@ wrapDomEventMaybe element elementOnevent getValue = do
           {-# SCC "e" #-} unsubscribe
   return $! {-# SCC "f" #-} e
 
-wrapElement :: (Functor (Event t), MonadIO m, MonadSample t m, MonadReflexCreateTrigger t m, Reflex t, HasPostGui t h m) => HTMLElement -> m (El t)
+wrapElement :: (Functor (Event t), MonadIO m, MonadSample t m, MonadReflexCreateTrigger t m, Reflex t, HasPostGui t h m) => Element -> m (El t)
 wrapElement e = do
   clicked <- wrapDomEvent e elementOnclick (return ())
   keypress <- wrapDomEvent e elementOnkeypress $ liftIO . uiEventGetKeyCode =<< event
@@ -425,24 +439,37 @@ elClass elementTag c child = elAttr elementTag ("class" =: c) child
 -- Copied and pasted from Reflex.Widget.Class
 --------------------------------------------------------------------------------
 
+#ifdef ghcjs_HOST_OS
+foreign import javascript unsafe "$1[\"innerHTML\"] = $2;"
+        js_setInnerHTML :: JSRef Element -> JSString -> IO ()
+-- | <https://developer.mozilla.org/en-US/docs/Web/API/Element.innerHTML Mozilla Element.innerHTML documentation> 
+setInnerHTML ::
+             (MonadIO m, IsElement self, ToJSString val) => self -> val -> m ()
+setInnerHTML self val
+  = liftIO
+      (js_setInnerHTML (unElement (toElement self)) (toJSString val))
+#else
+
+setInnerHTML = undefined
+
+#endif
+
+
 list :: (MonadWidget t m, Ord k) => Dynamic t (Map k v) -> (Dynamic t v -> m a) -> m (Dynamic t (Map k a))
 list dm mkChild = listWithKey dm (\_ dv -> mkChild dv)
-
-simpleList :: MonadWidget t m => Dynamic t [v] -> (Dynamic t v -> m a) -> m (Dynamic t [a])
-simpleList xs mkChild = mapDyn (map snd . Map.toList) =<< flip list mkChild =<< mapDyn (Map.fromList . zip [(1::Int)..]) xs
 
 elDynHtml' :: MonadWidget t m => String -> Dynamic t String -> m (El t)
 elDynHtml' elementTag html = do
   e <- buildEmptyElement elementTag (Map.empty :: Map String String)
-  schedulePostBuild $ liftIO . htmlElementSetInnerHTML e =<< sample (current html)
-  addVoidAction $ fmap (liftIO . htmlElementSetInnerHTML e) $ updated html
+  schedulePostBuild $ liftIO . setInnerHTML e =<< sample (current html)
+  addVoidAction $ fmap (liftIO . setInnerHTML e) $ updated html
   wrapElement e
 
 elDynHtmlAttr' :: MonadWidget t m => String -> Map String String -> Dynamic t String -> m (El t)
 elDynHtmlAttr' elementTag attrs html = do
   e <- buildEmptyElement elementTag attrs
-  schedulePostBuild $ liftIO . htmlElementSetInnerHTML e =<< sample (current html)
-  addVoidAction $ fmap (liftIO . htmlElementSetInnerHTML e) $ updated html
+  schedulePostBuild $ liftIO . setInnerHTML e =<< sample (current html)
+  addVoidAction $ fmap (liftIO . setInnerHTML e) $ updated html
   wrapElement e
 
 {-
@@ -453,7 +480,7 @@ dynHtml :: MonadWidget t m => Dynamic t String -> m ()
 dynHtml ds = do
   let mkSelf h = do
         doc <- askDocument
-        Just e <- liftIO $ liftM (fmap castToHTMLElement) $ documentCreateElement doc "div"
+        Just e <- liftIO $ liftM (fmap castToElement) $ documentCreateElement doc "div"
         liftIO $ htmlElementSetInnerHTML e h
         return e
   eCreated <- performEvent . fmap mkSelf . tagDyn ds =<< getEInit
@@ -533,7 +560,7 @@ tabDisplay ulClass activeClass tabItems = do
         return $ fmap (const k) (_link_clicked a)
 
 -- | Place an element into the DOM and wrap it with Reflex event handlers.  Note: undefined behavior may result if the element is placed multiple times, removed from the DOM after being placed, or in other situations.  Don't use this unless you understand the internals of MonadWidget.
-unsafePlaceElement :: MonadWidget t m => HTMLElement -> m (El t)
+unsafePlaceElement :: MonadWidget t m => Element -> m (El t)
 unsafePlaceElement e = do
   p <- askParent
   _ <- liftIO $ nodeAppendChild p $ Just e

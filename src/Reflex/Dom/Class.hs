@@ -12,7 +12,10 @@ import qualified Data.Map as Map
 import Data.Foldable
 import Control.Monad.Ref
 import Control.Monad.Reader hiding (mapM, mapM_, forM, forM_, sequence)
+
 import Control.Monad.State hiding (mapM, mapM_, forM, forM_, sequence)
+import qualified Control.Monad.State.Strict as Strict
+
 import Data.Dependent.Sum (DSum (..))
 import GHCJS.DOM.Types hiding (Event)
 
@@ -27,7 +30,7 @@ keycodeEscape :: Int
 keycodeEscape = 27
 
 class ( Reflex t, MonadHold t m, MonadIO m, Functor m, MonadReflexCreateTrigger t m
-      , HasDocument m
+      , HasDocument m, HasNamespace m
       , MonadIO (WidgetHost m), MonadIO (GuiAction m), Functor (WidgetHost m), MonadSample t (WidgetHost m)
       , HasPostGui t (GuiAction m) (WidgetHost m), HasPostGui t (GuiAction m) m, MonadRef m, MonadRef (WidgetHost m)
       , Ref m ~ Ref IO, Ref (WidgetHost m) ~ Ref IO --TODO: Eliminate this reliance on IO
@@ -45,13 +48,32 @@ class ( Reflex t, MonadHold t m, MonadIO m, Functor m, MonadReflexCreateTrigger 
 
 class Monad m => HasDocument m where
   askDocument :: m HTMLDocument
+  
+  
+class Monad m => HasNamespace m where  
+  askNamespace :: m (Maybe String)
+  localNamespace :: Maybe String -> m a -> m a
 
-instance HasDocument m => HasDocument (ReaderT r m) where
-  askDocument = lift askDocument
 
 instance HasDocument m => HasDocument (StateT r m) where
   askDocument = lift askDocument
 
+instance HasDocument m => HasDocument (ReaderT r m) where
+  askDocument = lift askDocument
+   
+instance HasNamespace m => HasNamespace (StateT r m) where  
+  askNamespace = lift askNamespace
+  localNamespace ns m = StateT $ \s -> localNamespace ns (runStateT m s)
+
+instance HasNamespace m => HasNamespace (Strict.StateT r m) where  
+  askNamespace = lift askNamespace
+  localNamespace ns m = Strict.StateT $ \s -> localNamespace ns (Strict.runStateT m s)
+
+  
+instance HasNamespace m => HasNamespace (ReaderT r m) where  
+  askNamespace = lift askNamespace
+  localNamespace ns m = ReaderT $ \r -> localNamespace ns (runReaderT m r)
+  
 class (MonadRef h, Ref h ~ Ref m, MonadRef m) => HasPostGui t h m | m -> t h where
   askPostGui :: m (h () -> IO ())
   askRunWithActions :: m ([DSum (EventTrigger t)] -> h ())

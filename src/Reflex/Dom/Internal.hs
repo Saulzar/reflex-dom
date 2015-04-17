@@ -17,7 +17,9 @@ import Control.Lens
 import Control.Monad hiding (mapM, mapM_, forM, forM_, sequence, sequence_)
 import Control.Monad.Reader hiding (mapM, mapM_, forM, forM_, sequence, sequence_)
 import Control.Monad.Ref
+
 import Control.Monad.State.Strict hiding (mapM, mapM_, forM, forM_, sequence, sequence_)
+
 import Control.Concurrent
 import Data.ByteString (ByteString)
 import Data.Dependent.Sum (DSum (..))
@@ -29,6 +31,7 @@ import Data.Monoid ((<>))
 
 data GuiEnv t h
    = GuiEnv { _guiEnvDocument :: !HTMLDocument
+            , _guiEnvNamespace :: Maybe String
             , _guiEnvPostGui :: !(h () -> IO ())
             , _guiEnvRunWithActions :: !([DSum (EventTrigger t)] -> h ())
             }
@@ -75,9 +78,12 @@ liftM concat $ mapM makeLenses
 
 instance Monad m => HasDocument (Gui t h m) where
   askDocument = Gui $ view guiEnvDocument
-
-instance HasDocument m => HasDocument (Widget t m) where
-  askDocument = lift askDocument
+  
+  
+instance Monad m => HasNamespace (Gui t h m) where  
+  askNamespace = Gui $ view guiEnvNamespace
+  localNamespace ns gui = Gui $ local (set guiEnvNamespace ns) (unGui gui)
+  
 
 instance (MonadRef h, Ref h ~ Ref m, MonadRef m) => HasPostGui t h (Gui t h m) where
   askPostGui = Gui $ view guiEnvPostGui
@@ -92,7 +98,17 @@ type WidgetInternal t m a = ReaderT WidgetEnv (StateT (WidgetState t m) m) a
 instance MonadTrans (Widget t) where
   lift = Widget . lift . lift
 
+
 newtype Widget t m a = Widget { unWidget :: WidgetInternal t m a } deriving (Functor, Applicative, Monad, MonadFix, MonadIO)
+
+
+instance HasDocument m => HasDocument (Widget t m) where
+  askDocument = lift askDocument
+  
+  
+instance HasNamespace m => HasNamespace (Widget t m) where
+  askNamespace = lift askNamespace
+  localNamespace ns w = Widget $ localNamespace ns (unWidget w)
 
 instance MonadSample t m => MonadSample t (Widget t m) where
   sample b = lift $ sample b
@@ -181,7 +197,7 @@ attachWidget :: (IsHTMLElement e) => e -> Widget Spider (Gui Spider SpiderHost (
 attachWidget rootElement w = runSpiderHost $ do --TODO: It seems to re-run this handler if the URL changes, even if it's only the fragment
   Just doc <- liftM (fmap castToHTMLDocument) $ liftIO $ nodeGetOwnerDocument rootElement
   frames <- liftIO newChan
-  rec let guiEnv = GuiEnv doc (writeChan frames . runSpiderHost) runWithActions :: GuiEnv Spider SpiderHost
+  rec let guiEnv = GuiEnv doc Nothing (writeChan frames . runSpiderHost) runWithActions :: GuiEnv Spider SpiderHost
           runWithActions dm = do
             voidActionNeeded <- fireEventsAndRead dm $ do
               sequence =<< readEvent voidActionHandle
