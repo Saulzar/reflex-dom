@@ -30,7 +30,7 @@ keycodeEscape :: Int
 keycodeEscape = 27
 
 class ( Reflex t, MonadHold t m, MonadIO m, Functor m, MonadReflexCreateTrigger t m
-      , HasDocument m, HasNamespace m
+      , HasDocument m
       , MonadIO (WidgetHost m), MonadIO (GuiAction m), Functor (WidgetHost m), MonadSample t (WidgetHost m)
       , HasPostGui t (GuiAction m) (WidgetHost m), HasPostGui t (GuiAction m) m, MonadRef m, MonadRef (WidgetHost m)
       , Ref m ~ Ref IO, Ref (WidgetHost m) ~ Ref IO --TODO: Eliminate this reliance on IO
@@ -39,6 +39,9 @@ class ( Reflex t, MonadHold t m, MonadIO m, Functor m, MonadReflexCreateTrigger 
   type WidgetHost m :: * -> *
   type GuiAction m :: * -> *
   askParent :: m Node
+  askNamespace :: m (Maybe String)
+  localNamespace :: Maybe String -> m a -> m a
+  
   subWidget :: Node -> m a -> m a
   subWidgetWithVoidActions :: Node -> m a -> m (a, Event t (WidgetHost m ()))
   liftWidgetHost :: WidgetHost m a -> m a --TODO: Is this a good idea?
@@ -48,31 +51,12 @@ class ( Reflex t, MonadHold t m, MonadIO m, Functor m, MonadReflexCreateTrigger 
 
 class Monad m => HasDocument m where
   askDocument :: m HTMLDocument
-  
-  
-class Monad m => HasNamespace m where  
-  askNamespace :: m (Maybe String)
-  localNamespace :: Maybe String -> m a -> m a
-
 
 instance HasDocument m => HasDocument (StateT r m) where
   askDocument = lift askDocument
 
 instance HasDocument m => HasDocument (ReaderT r m) where
   askDocument = lift askDocument
-   
-instance HasNamespace m => HasNamespace (StateT r m) where  
-  askNamespace = lift askNamespace
-  localNamespace ns m = StateT $ \s -> localNamespace ns (runStateT m s)
-
-instance HasNamespace m => HasNamespace (Strict.StateT r m) where  
-  askNamespace = lift askNamespace
-  localNamespace ns m = Strict.StateT $ \s -> localNamespace ns (Strict.runStateT m s)
-
-  
-instance HasNamespace m => HasNamespace (ReaderT r m) where  
-  askNamespace = lift askNamespace
-  localNamespace ns m = ReaderT $ \r -> localNamespace ns (runReaderT m r)
   
 class (MonadRef h, Ref h ~ Ref m, MonadRef m) => HasPostGui t h m | m -> t h where
   askPostGui :: m (h () -> IO ())
@@ -92,6 +76,9 @@ instance MonadWidget t m => MonadWidget t (ReaderT r m) where
   type WidgetHost (ReaderT r m) = WidgetHost m
   type GuiAction (ReaderT r m) = GuiAction m
   askParent = lift askParent
+  askNamespace = lift askNamespace
+  localNamespace ns m = ReaderT $ \r -> localNamespace ns (runReaderT m r)
+  
   subWidget n w = do
     r <- ask
     lift $ subWidget n $ runReaderT w r

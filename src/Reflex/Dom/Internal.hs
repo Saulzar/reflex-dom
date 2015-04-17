@@ -31,7 +31,6 @@ import Data.Monoid ((<>))
 
 data GuiEnv t h
    = GuiEnv { _guiEnvDocument :: !HTMLDocument
-            , _guiEnvNamespace :: Maybe String
             , _guiEnvPostGui :: !(h () -> IO ())
             , _guiEnvRunWithActions :: !([DSum (EventTrigger t)] -> h ())
             }
@@ -63,6 +62,7 @@ instance (Reflex t, MonadReflexCreateTrigger t m) => MonadReflexCreateTrigger t 
 
 data WidgetEnv
    = WidgetEnv { _widgetEnvParent :: !Node
+               , _widgetEnvNamespace :: Maybe String
                }
 
 data WidgetState t m
@@ -78,12 +78,7 @@ liftM concat $ mapM makeLenses
 
 instance Monad m => HasDocument (Gui t h m) where
   askDocument = Gui $ view guiEnvDocument
-  
-  
-instance Monad m => HasNamespace (Gui t h m) where  
-  askNamespace = Gui $ view guiEnvNamespace
-  localNamespace ns gui = Gui $ local (set guiEnvNamespace ns) (unGui gui)
-  
+
 
 instance (MonadRef h, Ref h ~ Ref m, MonadRef m) => HasPostGui t h (Gui t h m) where
   askPostGui = Gui $ view guiEnvPostGui
@@ -105,11 +100,6 @@ newtype Widget t m a = Widget { unWidget :: WidgetInternal t m a } deriving (Fun
 instance HasDocument m => HasDocument (Widget t m) where
   askDocument = lift askDocument
   
-  
-instance HasNamespace m => HasNamespace (Widget t m) where
-  askNamespace = lift askNamespace
-  localNamespace ns w = Widget $ localNamespace ns (unWidget w)
-
 instance MonadSample t m => MonadSample t (Widget t m) where
   sample b = lift $ sample b
 
@@ -138,6 +128,10 @@ instance ( MonadRef m, Ref m ~ Ref IO, MonadRef h, Ref h ~ Ref IO --TODO: Should
   type WidgetHost (Widget t (Gui t h m)) = Gui t h m
   type GuiAction (Widget t (Gui t h m)) = h
   askParent = Widget $ view widgetEnvParent
+  askNamespace = Widget $ view widgetEnvNamespace
+  localNamespace ns w = Widget $ local (set widgetEnvNamespace ns) (unWidget w)
+
+  
   --TODO: Use types to separate cohorts of possibly-recursive events/behaviors
   -- | Schedule an action to occur after the current cohort has been built; this is necessary because Behaviors built in the current cohort may not be read until after it is complete
   --schedulePostBuild :: Monad m => m () -> WidgetInternal t m ()
@@ -159,7 +153,7 @@ instance ( MonadRef m, Ref m ~ Ref IO, MonadRef h, Ref h ~ Ref IO --TODO: Should
 
 runWidget :: (Monad m, Reflex t, IsNode n) => n -> Widget t (Gui t h m) a -> WidgetHost (Widget t (Gui t h m)) (a, WidgetHost (Widget t (Gui t h m)) (), Event t (WidgetHost (Widget t (Gui t h m)) ()))
 runWidget rootElement w = do
-  (result, WidgetState postBuild voidActions) <- runStateT (runReaderT (unWidget w) (WidgetEnv $ toNode rootElement)) (WidgetState (return ()) [])
+  (result, WidgetState postBuild voidActions) <- runStateT (runReaderT (unWidget w) (WidgetEnv  (toNode rootElement) Nothing)) (WidgetState (return ()) [])
   let voidAction = mergeWith (>>) voidActions
   return (result, postBuild, voidAction)
 
@@ -197,7 +191,7 @@ attachWidget :: (IsHTMLElement e) => e -> Widget Spider (Gui Spider SpiderHost (
 attachWidget rootElement w = runSpiderHost $ do --TODO: It seems to re-run this handler if the URL changes, even if it's only the fragment
   Just doc <- liftM (fmap castToHTMLDocument) $ liftIO $ nodeGetOwnerDocument rootElement
   frames <- liftIO newChan
-  rec let guiEnv = GuiEnv doc Nothing (writeChan frames . runSpiderHost) runWithActions :: GuiEnv Spider SpiderHost
+  rec let guiEnv = GuiEnv doc (writeChan frames . runSpiderHost) runWithActions :: GuiEnv Spider SpiderHost
           runWithActions dm = do
             voidActionNeeded <- fireEventsAndRead dm $ do
               sequence =<< readEvent voidActionHandle

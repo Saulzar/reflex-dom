@@ -1,4 +1,4 @@
-{-# LANGUAGE ForeignFunctionInterface, JavaScriptFFI, CPP, ScopedTypeVariables, LambdaCase, ConstraintKinds, TypeFamilies, FlexibleContexts, MultiParamTypeClasses, FlexibleInstances, RecursiveDo #-}
+{-# LANGUAGE ForeignFunctionInterface, JavaScriptFFI, CPP, ScopedTypeVariables, LambdaCase, ConstraintKinds, TypeFamilies, FlexibleContexts, MultiParamTypeClasses, FlexibleInstances, RecursiveDo, TemplateHaskell #-}
 
 module Reflex.Dom.Widget.Basic where
 
@@ -41,6 +41,10 @@ data El t
        , _el_keypress :: Event t Int
        , _el_scrolled :: Event t Int
        }
+       
+liftM concat $ mapM makeLenses
+  [ ''El
+  ]       
 
 class Attributes m a where
   addAttributes :: IsElement e => a -> e -> m ()
@@ -48,22 +52,44 @@ class Attributes m a where
 instance MonadIO m => Attributes m AttributeMap where
   addAttributes curAttrs e = liftIO $ imapM_ (elementSetAttribute e) curAttrs
 
+ 
+setAttribute :: (MonadWidget t m, IsElement e) => m (e -> String -> String -> IO ()) 
+setAttribute = do
+  namespace <- askNamespace 
+  
+  return $ case namespace of 
+    Just ns -> \e -> elementSetAttributeNS e ns
+    Nothing -> elementSetAttribute
+
+removeAttribute :: (MonadWidget t m, IsElement e) => m (e -> String -> IO ()) 
+removeAttribute = do
+  namespace <- askNamespace 
+  
+  return $ case namespace of 
+    Just ns -> \e -> elementRemoveAttributeNS e ns
+    Nothing -> elementRemoveAttribute    
+  
 instance MonadWidget t m => Attributes m (Dynamic t AttributeMap) where
   addAttributes attrs e = do
+    
+    setAttr <- setAttribute
+    removeAttr <- removeAttribute
+    
     schedulePostBuild $ do
       curAttrs <- sample $ current attrs
-      liftIO $ imapM_ (elementSetAttribute e) curAttrs
+      liftIO $ imapM_ (setAttr e) curAttrs
     addVoidAction $ flip fmap (updated attrs) $ \newAttrs -> liftIO $ do
       oldAttrs <- maybe (return Set.empty) namedNodeMapGetNames =<< elementGetAttributes e
-      forM_ (Set.toList $ oldAttrs `Set.difference` Map.keysSet newAttrs) $ elementRemoveAttribute e
-      imapM_ (elementSetAttribute e) newAttrs --TODO: avoid re-setting unchanged attributes; possibly do the compare using Align in haskell
+      forM_ (Set.toList $ oldAttrs `Set.difference` Map.keysSet newAttrs) $ removeAttr e
+      imapM_ (setAttr e) newAttrs --TODO: avoid re-setting unchanged attributes; possibly do the compare using Align in haskell
 
 buildEmptyElement :: (MonadWidget t m, Attributes m attrs) => String -> attrs -> m Element
 buildEmptyElement elementTag attrs = do
   doc <- askDocument
   p <- askParent
-  
   namespace <- askNamespace 
+  
+  liftIO $ print (elementTag, namespace)
   
   Just e <- liftIO $ case namespace of 
     Just ns -> documentCreateElementNS doc ns elementTag
