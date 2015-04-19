@@ -62,7 +62,6 @@ instance (Reflex t, MonadReflexCreateTrigger t m) => MonadReflexCreateTrigger t 
 
 data WidgetEnv
    = WidgetEnv { _widgetEnvParent :: !Node
-               , _widgetEnvNamespace :: Maybe String
                }
 
 data WidgetState t m
@@ -120,9 +119,6 @@ instance MonadRef m => MonadRef (Widget t m) where
 instance MonadReflexCreateTrigger t m => MonadReflexCreateTrigger t (Widget t m) where
   newEventWithTrigger = lift . newEventWithTrigger
 
-printNS msg = do
-  ns <- askNamespace
-  liftIO $ print (msg, ns)  
   
 instance ( MonadRef m, Ref m ~ Ref IO, MonadRef h, Ref h ~ Ref IO --TODO: Shouldn't need to be IO
          , MonadIO m, MonadIO h, Functor m
@@ -132,8 +128,6 @@ instance ( MonadRef m, Ref m ~ Ref IO, MonadRef h, Ref h ~ Ref IO --TODO: Should
   type WidgetHost (Widget t (Gui t h m)) = Gui t h m
   type GuiAction (Widget t (Gui t h m)) = h
   askParent = Widget $ view widgetEnvParent
-  askNamespace = Widget $ view widgetEnvNamespace
-  localNamespace ns w = Widget $ local (set widgetEnvNamespace ns) (unWidget w)
 
   
   --TODO: Use types to separate cohorts of possibly-recursive events/behaviors
@@ -156,12 +150,11 @@ instance ( MonadRef m, Ref m ~ Ref IO, MonadRef h, Ref h ~ Ref IO --TODO: Should
     return (result, mergeWith (>>) actions)
 --  runWidget :: (Monad m, IsNode n, Reflex t) => n -> Widget t m a -> m (a, Event t (m ()))
   getRunWidget = do 
-    namespace <- askNamespace
-    return (runWidget namespace)
-
-runWidget :: (Monad m, Reflex t, IsNode n) => Maybe String -> n -> Widget t (Gui t h m) a -> WidgetHost (Widget t (Gui t h m)) (a, WidgetHost (Widget t (Gui t h m)) (), Event t (WidgetHost (Widget t (Gui t h m)) ()))
-runWidget namespace rootElement w = do
-  (result, WidgetState postBuild voidActions) <- runStateT (runReaderT (unWidget w) (WidgetEnv  (toNode rootElement) namespace)) (WidgetState (return ()) [])
+    return runWidget
+    
+runWidget :: (Monad m, Reflex t, IsNode n) => n -> Widget t (Gui t h m) a -> WidgetHost (Widget t (Gui t h m)) (a, WidgetHost (Widget t (Gui t h m)) (), Event t (WidgetHost (Widget t (Gui t h m)) ()))
+runWidget  rootElement w = do
+  (result, WidgetState postBuild voidActions) <- runStateT (runReaderT (unWidget w) (WidgetEnv  (toNode rootElement))) (WidgetState (return ()) [])
   let voidAction = mergeWith (>>) voidActions
   return (result, postBuild, voidAction)
 
@@ -206,7 +199,7 @@ attachWidget rootElement w = runSpiderHost $ do --TODO: It seems to re-run this 
             runHostFrame $ runGui (sequence_ voidActionNeeded) guiEnv
       Just df <- liftIO $ documentCreateDocumentFragment doc
       (result, voidAction) <- runHostFrame $ flip runGui guiEnv $ do
-        (r, postBuild, va) <- runWidget Nothing df w
+        (r, postBuild, va) <- runWidget df w
         postBuild
         return (r, va)
       liftIO $ htmlElementSetInnerHTML rootElement ""

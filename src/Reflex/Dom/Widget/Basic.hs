@@ -51,7 +51,7 @@ class Attributes m a where
 
 instance MonadIO m => Attributes m AttributeMap where
   addAttributes curAttrs e = liftIO $ imapM_ (elementSetAttribute e) curAttrs
-
+  
   
 instance MonadWidget t m => Attributes m (Dynamic t AttributeMap) where
   addAttributes attrs e = do
@@ -63,11 +63,10 @@ instance MonadWidget t m => Attributes m (Dynamic t AttributeMap) where
       forM_ (Set.toList $ oldAttrs `Set.difference` Map.keysSet newAttrs) $ elementRemoveAttribute e
       imapM_ (elementSetAttribute e) newAttrs --TODO: avoid re-setting unchanged attributes; possibly do the compare using Align in haskell
 
-buildEmptyElement :: (MonadWidget t m, Attributes m attrs) => String -> attrs -> m Element
-buildEmptyElement elementTag attrs = do
+buildEmptyElementNS :: (MonadWidget t m, Attributes m attrs) => Maybe String -> String -> attrs -> m Element
+buildEmptyElementNS namespace elementTag attrs = do
   doc <- askDocument
   p <- askParent
-  namespace <- askNamespace 
   
   Just e <- liftIO $ case namespace of 
     Just ns -> documentCreateElementNS doc ns elementTag
@@ -76,15 +75,20 @@ buildEmptyElement elementTag attrs = do
   addAttributes attrs e
   _ <- liftIO $ nodeAppendChild p $ Just e
   return $ castToElement e
+
+  
+buildEmptyElement :: (MonadWidget t m, Attributes m attrs) => String -> attrs -> m Element
+buildEmptyElement = buildEmptyElementNS Nothing  
   
 -- We need to decide what type of attrs we've got statically, because it will often be a recursively defined value, in which case inspecting it will lead to a cycle
-buildElement :: (MonadWidget t m, Attributes m attrs) => String -> attrs -> m a -> m (Element, a)
-buildElement elementTag attrs child = do
-  e <- buildEmptyElement elementTag attrs
+buildElementNS :: (MonadWidget t m, Attributes m attrs) => Maybe String -> String -> attrs -> m a -> m (Element, a)
+buildElementNS namespace elementTag attrs child = do
+  e <- buildEmptyElementNS namespace elementTag attrs
   result <- subWidget (toNode e) child
   return (e, result)
 
-
+buildElement :: (MonadWidget t m, Attributes m attrs) => String -> attrs -> m a -> m (Element, a)
+buildElement = buildElementNS Nothing 
 
 namedNodeMapGetNames :: IsNamedNodeMap self => self -> IO (Set String)
 namedNodeMapGetNames self = do
@@ -474,6 +478,9 @@ elDynHtmlAttr' elementTag attrs html = do
   addVoidAction $ fmap (liftIO . setInnerHTML e) $ updated html
   wrapElement e
 
+  
+  
+  
 {-
 
 --TODO: Update dynamically
